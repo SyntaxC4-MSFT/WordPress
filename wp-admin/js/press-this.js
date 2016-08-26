@@ -5,6 +5,8 @@
 ( function( $, window ) {
 	var PressThis = function() {
 		var editor, $mediaList, $mediaThumbWrap,
+			$window               = $( window ),
+			$document             = $( document ),
 			saveAlert             = false,
 			textarea              = document.createElement( 'textarea' ),
 			sidebarIsOpen         = false,
@@ -16,6 +18,11 @@
 			isOffScreen           = 'is-off-screen',
 			isHidden              = 'is-hidden',
 			offscreenHidden       = isOffScreen + ' ' + isHidden,
+			iOS                   = /iPad|iPod|iPhone/.test( window.navigator.userAgent ),
+			$textEditor           = $( '#pressthis' ),
+			textEditor            = $textEditor[0],
+			textEditorMinHeight   = 600,
+			textLength            = 0,
 			transitionEndEvent    = ( function() {
 				var style = document.documentElement.style;
 
@@ -102,9 +109,7 @@
 		 */
 		function showSpinner() {
 			$( '.spinner' ).addClass( 'is-active' );
-			$( '.post-actions button' ).each( function() {
-				$( this ).attr( 'disabled', 'disabled' );
-			} );
+			$( '.post-actions button' ).attr( 'disabled', 'disabled' );
 		}
 
 		/**
@@ -112,9 +117,100 @@
 		 */
 		function hideSpinner() {
 			$( '.spinner' ).removeClass( 'is-active' );
-			$( '.post-actions button' ).each( function() {
-				$( this ).removeAttr( 'disabled' );
-			} );
+			$( '.post-actions button' ).removeAttr( 'disabled' );
+		}
+
+		function textEditorResize( reset ) {
+			var pageYOffset, height;
+
+			if ( editor && ! editor.isHidden() ) {
+ 				return;
+ 			}
+
+			reset = ( reset === 'reset' ) || ( textLength && textLength > textEditor.value.length );
+			height = textEditor.style.height;
+
+			if ( reset ) {
+				pageYOffset = window.pageYOffset;
+
+				textEditor.style.height = 'auto';
+				textEditor.style.height = Math.max( textEditor.scrollHeight, textEditorMinHeight ) + 'px';
+				window.scrollTo( window.pageXOffset, pageYOffset );
+			} else if ( parseInt( textEditor.style.height, 10 ) < textEditor.scrollHeight ) {
+				textEditor.style.height = textEditor.scrollHeight + 'px';
+ 			}
+
+ 			textLength = textEditor.value.length;
+ 		}
+
+ 		function mceGetCursorOffset() {
+			if ( ! editor ) {
+				return false;
+			}
+
+			var node = editor.selection.getNode(),
+				range, view, offset;
+
+			if ( editor.wp && editor.wp.getView && ( view = editor.wp.getView( node ) ) ) {
+				offset = view.getBoundingClientRect();
+			} else {
+				range = editor.selection.getRng();
+
+				try {
+					offset = range.getClientRects()[0];
+				} catch( er ) {}
+
+				if ( ! offset ) {
+					offset = node.getBoundingClientRect();
+				}
+			}
+
+			return offset.height ? offset : false;
+		}
+
+		// Make sure the caret is always visible.
+		function mceKeyup( event ) {
+			var VK = window.tinymce.util.VK,
+				key = event.keyCode;
+
+			// Bail on special keys.
+			if ( key <= 47 && ! ( key === VK.SPACEBAR || key === VK.ENTER || key === VK.DELETE || key === VK.BACKSPACE || key === VK.UP || key === VK.LEFT || key === VK.DOWN || key === VK.UP ) ) {
+				return;
+			// OS keys, function keys, num lock, scroll lock
+			} else if ( ( key >= 91 && key <= 93 ) || ( key >= 112 && key <= 123 ) || key === 144 || key === 145 ) {
+				return;
+			}
+
+			mceScroll( key );
+		}
+
+		function mceScroll( key ) {
+			var cursorTop, cursorBottom, editorBottom,
+				offset = mceGetCursorOffset(),
+				bufferTop = 50,
+				bufferBottom = 65,
+				VK = window.tinymce.util.VK;
+
+			if ( ! offset ) {
+				return;
+			}
+
+			cursorTop = offset.top + editor.iframeElement.getBoundingClientRect().top;
+			cursorBottom = cursorTop + offset.height;
+			cursorTop = cursorTop - bufferTop;
+			cursorBottom = cursorBottom + bufferBottom;
+			editorBottom = $window.height();
+
+			// Don't scroll if the node is taller than the visible part of the editor
+			if ( editorBottom < offset.height ) {
+				return;
+			}
+
+			if ( cursorTop < 0 && ( key === VK.UP || key === VK.LEFT || key === VK.BACKSPACE ) ) {
+				window.scrollTo( window.pageXOffset, cursorTop + window.pageYOffset );
+			} else if ( cursorBottom > editorBottom ) {
+				window.scrollTo( window.pageXOffset, cursorBottom + window.pageYOffset - editorBottom );
+			}
 		}
 
 		/**
@@ -184,21 +280,25 @@
 				data: data
 			}).always( function() {
 				hideSpinner();
+				clearNotices();
+				$( '.publish-button' ).removeClass( 'is-saving' );
 			}).done( function( response ) {
 				if ( ! response.success ) {
 					renderError( response.data.errorMessage );
 				} else if ( response.data.redirect ) {
-					if ( window.opener && settings.redirInParent ) {
+					if ( window.opener && ( settings.redirInParent || response.data.force ) ) {
 						try {
 							window.opener.location.href = response.data.redirect;
-						} catch( er ) {}
 
-						window.self.close();
+							window.setTimeout( function() {
+								window.self.close();
+							}, 200 );
+						} catch( er ) {
+							window.location.href = response.data.redirect;
+						}
 					} else {
 						window.location.href = response.data.redirect;
 					}
-				} else if ( response.data.postSaved ) {
-					// show "success" message?
 				}
 			}).fail( function() {
 				renderError( __( 'serverError' ) );
@@ -215,10 +315,6 @@
 		function insertSelectedMedia( $element ) {
 			var src, link, newContent = '';
 
-			if ( ! editor ) {
-				return;
-			}
-
 			src = checkUrl( $element.attr( 'data-wp-src' ) || '' );
 			link = checkUrl( data.u );
 
@@ -227,15 +323,19 @@
 					link = src;
 				}
 
-				newContent = '<a href="' + link + '"><img class="alignnone size-full" src="' + src + '" /></a>';
+				newContent = '<a href="' + link + '"><img class="alignnone size-full" src="' + src + '" alt="" /></a>';
 			} else {
 				newContent = '[embed]' + src + '[/embed]';
 			}
 
-			if ( ! hasSetFocus ) {
-				editor.setContent( '<p>' + newContent + '</p>' + editor.getContent() );
-			} else {
-				editor.execCommand( 'mceInsertContent', false, newContent );
+			if ( editor && ! editor.isHidden() ) {
+				if ( ! hasSetFocus ) {
+					editor.setContent( '<p>' + newContent + '</p>' + editor.getContent() );
+				} else {
+					editor.execCommand( 'mceInsertContent', false, newContent );
+				}
+			} else if ( window.QTags ) {
+				window.QTags.insertContent( newContent );
 			}
 		}
 
@@ -328,6 +428,10 @@
 			renderNotice( msg, true );
 		}
 
+		function clearNotices() {
+			$( 'div.alerts' ).empty();
+		}
+
 		/**
 		 * Render notices on page load, if any already
 		 */
@@ -337,11 +441,6 @@
 				$.each( data.errors, function( i, msg ) {
 					renderError( msg );
 				} );
-			}
-
-			// Prompt user to upgrade their bookmarklet if there is a version mismatch.
-			if ( data.v && settings.version && ( data.v + '' ) !== ( settings.version + '' ) ) {
-				$( '.should-upgrade-bookmarklet' ).removeClass( 'is-hidden' );
 			}
 		}
 
@@ -602,6 +701,11 @@
 			});
 		}
 
+		function splitButtonClose() {
+			$( '.split-button' ).removeClass( 'is-open' );
+			$( '.split-button-toggle' ).attr( 'aria-expanded', 'false' );
+		}
+
 		/* ***************************************************************
 		 * PROCESSING FUNCTIONS
 		 *************************************************************** */
@@ -618,40 +722,97 @@
 			if ( window.tagBox ) {
 				window.tagBox.init();
 			}
+
+			// iOS doesn't fire click events on "standard" elements without this...
+			if ( iOS ) {
+				$( document.body ).css( 'cursor', 'pointer' );
+			}
 		}
 
 		/**
 		 * Set app events and other state monitoring related code.
 		 */
-		function monitor(){
-			$( document ).on( 'tinymce-editor-init', function( event, ed ) {
+		function monitor() {
+			var $splitButton = $( '.split-button' );
+
+			$document.on( 'tinymce-editor-init', function( event, ed ) {
 				editor = ed;
 
-				ed.on( 'focus', function() {
+				editor.on( 'nodechange', function() {
 					hasSetFocus = true;
-				} );
+				});
+
+				editor.on( 'focus', function() {
+					splitButtonClose();
+				});
+
+				editor.on( 'show', function() {
+					setTimeout( function() {
+						editor.execCommand( 'wpAutoResize' );
+					}, 300 );
+				});
+
+				editor.on( 'hide', function() {
+					setTimeout( function() {
+						textEditorResize( 'reset' );
+					}, 100 );
+				});
+
+				editor.on( 'keyup', mceKeyup );
+				editor.on( 'undo redo', mceScroll );
+
 			}).on( 'click.press-this keypress.press-this', '.suggested-media-thumbnail', function( event ) {
 				if ( event.type === 'click' || event.keyCode === 13 ) {
 					insertSelectedMedia( $( this ) );
 				}
+			}).on( 'click.press-this', function( event ) {
+				if ( ! $( event.target ).closest( 'button' ).hasClass( 'split-button-toggle' ) ) {
+					splitButtonClose();
+				}
 			});
 
 			// Publish, Draft and Preview buttons
-
 			$( '.post-actions' ).on( 'click.press-this', function( event ) {
-				var $target = $( event.target );
+				var location,
+					$target = $( event.target ),
+					$button = $target.closest( 'button' );
 
-				if ( $target.hasClass( 'draft-button' ) ) {
-					submitPost( 'draft' );
-				} else if ( $target.hasClass( 'publish-button' ) ) {
-					submitPost( 'publish' );
-				} else if ( $target.hasClass( 'preview-button' ) ) {
-					prepareFormData();
-					window.opener && window.opener.focus();
+				if ( $button.length ) {
+					if ( $button.hasClass( 'draft-button' ) ) {
+						$( '.publish-button' ).addClass( 'is-saving' );
+						submitPost( 'draft' );
+					} else if ( $button.hasClass( 'publish-button' ) ) {
+						$button.addClass( 'is-saving' );
 
-					$( '#wp-preview' ).val( 'dopreview' );
-					$( '#pressthis-form' ).attr( 'target', '_blank' ).submit().attr( 'target', '' );
-					$( '#wp-preview' ).val( '' );
+						if ( window.history.replaceState ) {
+							location = window.location.href;
+							location += ( location.indexOf( '?' ) !== -1 ) ? '&' : '?';
+							location += 'wp-press-this-reload=true';
+
+							window.history.replaceState( null, null, location );
+						}
+
+						submitPost( 'publish' );
+					} else if ( $button.hasClass( 'preview-button' ) ) {
+						prepareFormData();
+						window.opener && window.opener.focus();
+
+						$( '#wp-preview' ).val( 'dopreview' );
+						$( '#pressthis-form' ).attr( 'target', '_blank' ).submit().attr( 'target', '' );
+						$( '#wp-preview' ).val( '' );
+					} else if ( $button.hasClass( 'standard-editor-button' ) ) {
+						$( '.publish-button' ).addClass( 'is-saving' );
+						$( '#pt-force-redirect' ).val( 'true' );
+						submitPost( 'draft' );
+					} else if ( $button.hasClass( 'split-button-toggle' ) ) {
+						if ( $splitButton.hasClass( 'is-open' ) ) {
+							$splitButton.removeClass( 'is-open' );
+							$button.attr( 'aria-expanded', 'false' );
+						} else {
+							$splitButton.addClass( 'is-open' );
+							$button.attr( 'aria-expanded', 'true' );
+						}
+					}
 				}
 			});
 
@@ -691,11 +852,15 @@
 				}
 			} );
 
-			$( window ).on( 'beforeunload.press-this', function() {
+			$window.on( 'beforeunload.press-this', function() {
 				if ( saveAlert || ( editor && editor.isDirty() ) ) {
 					return __( 'saveAlert' );
 				}
-			} );
+			} ).on( 'resize.press-this', function() {
+				if ( ! editor || editor.isHidden() ) {
+					textEditorResize( 'reset' );
+				}
+			});
 
 			$( 'button.add-cat-toggle' ).on( 'click.press-this', function() {
 				var $this = $( this );
@@ -730,6 +895,8 @@
 				}
 			} );
 
+			$textEditor.on( 'focus.press-this input.press-this propertychange.press-this', textEditorResize );
+
 			return true;
 		}
 
@@ -746,7 +913,7 @@
 		}
 
 		// Let's go!
-		$( document ).ready( function() {
+		$document.ready( function() {
 			render();
 			monitor();
 			refreshCatsCache();

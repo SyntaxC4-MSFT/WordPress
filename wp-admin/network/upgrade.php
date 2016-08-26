@@ -29,17 +29,17 @@ get_current_screen()->add_help_tab( array(
 
 get_current_screen()->set_help_sidebar(
 	'<p><strong>' . __('For more information:') . '</strong></p>' .
-	'<p>' . __('<a href="http://codex.wordpress.org/Network_Admin_Updates_Screen" target="_blank">Documentation on Upgrade Network</a>') . '</p>' .
+	'<p>' . __('<a href="https://codex.wordpress.org/Network_Admin_Updates_Screen" target="_blank">Documentation on Upgrade Network</a>') . '</p>' .
 	'<p>' . __('<a href="https://wordpress.org/support/" target="_blank">Support Forums</a>') . '</p>'
 );
 
 require_once( ABSPATH . 'wp-admin/admin-header.php' );
 
 if ( ! current_user_can( 'manage_network' ) )
-	wp_die( __( 'You do not have permission to access this page.' ), '', array( 'response' => 403 ) );
+	wp_die( __( 'You do not have permission to access this page.' ), 403 );
 
 echo '<div class="wrap">';
-echo '<h2>' . __( 'Upgrade Network' ) . '</h2>';
+echo '<h1>' . __( 'Upgrade Network' ) . '</h1>';
 
 $action = isset($_GET['action']) ? $_GET['action'] : 'show';
 
@@ -48,6 +48,9 @@ switch ( $action ) {
 		$n = ( isset($_GET['n']) ) ? intval($_GET['n']) : 0;
 
 		if ( $n < 5 ) {
+			/**
+			 * @global string $wp_db_version
+			 */
 			global $wp_db_version;
 			update_site_option( 'wpmu_upgrade_site', $wp_db_version );
 		}
@@ -89,7 +92,7 @@ switch ( $action ) {
 			 *
 			 * @since MU
 			 *
-			 * @param int $blog_id The id of the blog.
+			 * @param int $blog_id The Site ID.
 			 */
 			do_action( 'wpmu_upgrade_site', $details[ 'blog_id' ] );
 		}
@@ -108,12 +111,12 @@ switch ( $action ) {
 	default:
 		if ( get_site_option( 'wpmu_upgrade_site' ) != $GLOBALS['wp_db_version'] ) :
 		?>
-		<h3><?php _e( 'Database Upgrade Required' ); ?></h3>
+		<h2><?php _e( 'Database Update Required' ); ?></h2>
 		<p><?php _e( 'WordPress has been updated! Before we send you on your way, we need to individually upgrade the sites in your network.' ); ?></p>
 		<?php endif; ?>
 
-		<p><?php _e( 'The database upgrade process may take a little while, so please be patient.' ); ?></p>
-		<p><a class="button" href="upgrade.php?action=upgrade"><?php _e( 'Upgrade Network' ); ?></a></p>
+		<p><?php _e( 'The database update process may take a little while, so please be patient.' ); ?></p>
+		<p><a class="button button-primary" href="upgrade.php?action=upgrade"><?php _e( 'Upgrade Network' ); ?></a></p>
 		<?php
 		/**
 		 * Fires before the footer on the network upgrade screen.

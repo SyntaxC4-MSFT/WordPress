@@ -93,7 +93,7 @@ window.wp = window.wp || {};
 	 *
 	 * @since 3.9.0
 	 *
-	 * @param {string} updateType
+	 * @param {string} upgradeType
 	 */
 	wp.updates.decrementCount = function( upgradeType ) {
 		var count,
@@ -146,13 +146,17 @@ window.wp = window.wp || {};
 	 * @param {string} slug
 	 */
 	wp.updates.updatePlugin = function( plugin, slug ) {
-		var $message, name;
+		var $message, name,
+			$card = $( '.plugin-card-' + slug );
+
 		if ( 'plugins' === pagenow || 'plugins-network' === pagenow ) {
-			$message = $( '[data-slug="' + slug + '"]' ).next().find( '.update-message' );
+			$message = $( '[data-plugin="' + plugin + '"]' ).next().find( '.update-message' );
 		} else if ( 'plugin-install' === pagenow ) {
-			$message = $( '.plugin-card-' + slug ).find( '.update-now' );
+			$message = $card.find( '.update-now' );
 			name = $message.data( 'name' );
 			$message.attr( 'aria-label', wp.updates.l10n.updatingLabel.replace( '%s', name ) );
+			// Remove previous error messages, if any.
+			$card.removeClass( 'plugin-card-update-failed' ).find( '.notice.notice-error' ).remove();
 		}
 
 		$message.addClass( 'updating-message' );
@@ -203,7 +207,7 @@ window.wp = window.wp || {};
 	wp.updates.updateSuccess = function( response ) {
 		var $updateMessage, name, $pluginRow, newText;
 		if ( 'plugins' === pagenow || 'plugins-network' === pagenow ) {
-			$pluginRow = $( '[data-slug="' + response.slug + '"]' ).first();
+			$pluginRow = $( '[data-plugin="' + response.plugin + '"]' ).first();
 			$updateMessage = $pluginRow.next().find( '.update-message' );
 			$pluginRow.addClass( 'updated' ).removeClass( 'update' );
 
@@ -228,13 +232,14 @@ window.wp = window.wp || {};
 
 		wp.updates.updateDoneSuccessfully = true;
 
-		$(document).trigger( 'wp-plugin-update-success', response );
-
 		/*
 		 * The lock can be released since the update was successful,
 		 * and any other updates can commence.
 		 */
 		wp.updates.updateLock = false;
+
+		$(document).trigger( 'wp-plugin-update-success', response );
+
 		wp.updates.queueChecker();
 	};
 
@@ -247,25 +252,57 @@ window.wp = window.wp || {};
 	 * @param {object} response
 	 */
 	wp.updates.updateError = function( response ) {
-		var $message, name;
+		var $card = $( '.plugin-card-' + response.slug ),
+			$message,
+			$button,
+			name,
+			error_message;
+
 		wp.updates.updateDoneSuccessfully = false;
-		if ( response.errorCode && response.errorCode == 'unable_to_connect_to_filesystem' ) {
+
+		if ( response.errorCode && response.errorCode == 'unable_to_connect_to_filesystem' && wp.updates.shouldRequestFilesystemCredentials ) {
 			wp.updates.credentialError( response, 'update-plugin' );
 			return;
 		}
-		if ( 'plugins' === pagenow || 'plugins-network' === pagenow ) {
-			$message = $( '[data-slug="' + response.slug + '"]' ).next().find( '.update-message' );
-		} else if ( 'plugin-install' === pagenow ) {
-			$message = $( '.plugin-card-' + response.slug ).find( '.update-now' );
 
-			name = $message.data( 'name' );
-			$message.attr( 'aria-label', wp.updates.l10n.updateFailedLabel.replace( '%s', name ) );
+		error_message = wp.updates.l10n.updateFailed.replace( '%s', response.error );
+
+		if ( 'plugins' === pagenow || 'plugins-network' === pagenow ) {
+			$message = $( '[data-plugin="' + response.plugin + '"]' ).next().find( '.update-message' );
+			$message.html( error_message ).removeClass( 'updating-message' );
+		} else if ( 'plugin-install' === pagenow ) {
+			$button = $card.find( '.update-now' );
+			name = $button.data( 'name' );
+
+			$card
+				.addClass( 'plugin-card-update-failed' )
+				.append( '<div class="notice notice-error is-dismissible"><p>' + error_message + '</p></div>' );
+
+			$button
+				.attr( 'aria-label', wp.updates.l10n.updateFailedLabel.replace( '%s', name ) )
+				.html( wp.updates.l10n.updateFailedShort ).removeClass( 'updating-message' );
+
+			$card.on( 'click', '.notice.is-dismissible .notice-dismiss', function() {
+				// Use same delay as the total duration of the notice fadeTo + slideUp animation.
+				setTimeout( function() {
+					$card
+						.removeClass( 'plugin-card-update-failed' )
+						.find( '.column-name a' ).focus();
+				}, 200 );
+			});
 		}
-		$message.removeClass( 'updating-message' );
-		$message.text( wp.updates.l10n.updateFailed );
-		wp.a11y.speak( wp.updates.l10n.updateFailed );
+
+		wp.a11y.speak( error_message, 'assertive' );
+
+		/*
+		 * The lock can be released since this failure was
+		 * after the credentials form.
+		 */
+		wp.updates.updateLock = false;
 
 		$(document).trigger( 'wp-plugin-update-error', response );
+
+		wp.updates.queueChecker();
 	};
 
 	/**
@@ -372,7 +409,7 @@ window.wp = window.wp || {};
 		$( 'body' ).addClass( 'modal-open' );
 		$modal.show();
 
-		$modal.find( '#hostname' ).focus();
+		$modal.find( 'input:enabled:first' ).focus();
 		$modal.keydown( wp.updates.keydown );
 	};
 
@@ -394,13 +431,13 @@ window.wp = window.wp || {};
 	 */
 	wp.updates.requestForCredentialsModalCancel = function() {
 		// no updateLock and no updateQueue means we already have cleared things up
-		var slug, $message;
+		var data, $message;
 
 		if( wp.updates.updateLock === false && wp.updates.updateQueue.length === 0 ){
 			return;
 		}
 
-		slug = wp.updates.updateQueue[0].data.slug,
+		data = wp.updates.updateQueue[0].data;
 
 		// remove the lock, and clear the queue
 		wp.updates.updateLock = false;
@@ -408,17 +445,35 @@ window.wp = window.wp || {};
 
 		wp.updates.requestForCredentialsModalClose();
 		if ( 'plugins' === pagenow || 'plugins-network' === pagenow ) {
-			$message = $( '[data-slug="' + slug + '"]' ).next().find( '.update-message' );
+			$message = $( '[data-plugin="' + data.plugin + '"]' ).next().find( '.update-message' );
 		} else if ( 'plugin-install' === pagenow ) {
-			$message = $( '.plugin-card-' + slug ).find( '.update-now' );
+			$message = $( '.plugin-card-' + data.slug ).find( '.update-now' );
 		}
 
 		$message.removeClass( 'updating-message' );
 		$message.html( $message.data( 'originaltext' ) );
 		wp.a11y.speak( wp.updates.l10n.updateCancel );
 	};
+	/**
+	 * Potentially add an AYS to a user attempting to leave the page
+	 *
+	 * If an update is on-going and a user attempts to leave the page,
+	 * open an "Are you sure?" alert.
+	 *
+	 * @since 4.2.0
+	 */
+
+	wp.updates.beforeunload = function() {
+		if ( wp.updates.updateLock ) {
+			return wp.updates.l10n.beforeunload;
+		}
+	};
+
 
 	$( document ).ready( function() {
+		// Set initial focus on the first empty form field.
+		$( '#request-filesystem-credentials-form input[value=""]:first' ).focus();
+
 		/*
 		 * Check whether a user needs to submit filesystem credentials based on whether
 		 * the form was output on the page server-side.
@@ -451,6 +506,11 @@ window.wp = window.wp || {};
 			wp.updates.requestForCredentialsModalCancel();
 		});
 
+		// Hide SSH fields when not selected.
+		$( '#request-filesystem-credentials-form input[name="connection_type"]' ).on( 'change', function() {
+			$( '#ssh-keys' ).toggleClass( 'hidden', ( 'ssh' !== $( this ).val() ) );
+		});
+
 		// Click handler for plugin updates in List Table view.
 		$( '.plugin-update-tr' ).on( 'click', '.update-link', function( e ) {
 			e.preventDefault();
@@ -459,13 +519,18 @@ window.wp = window.wp || {};
 			}
 			var updateRow = $( e.target ).parents( '.plugin-update-tr' );
 			// Return the user to the input box of the plugin's table row after closing the modal.
-			wp.updates.$elToReturnFocusToFromCredentialsModal = $( '#' + updateRow.data( 'slug' ) ).find( '.check-column input' );
+			wp.updates.$elToReturnFocusToFromCredentialsModal = updateRow.prev().find( '.check-column input' );
 			wp.updates.updatePlugin( updateRow.data( 'plugin' ), updateRow.data( 'slug' ) );
 		} );
 
 		$( '.plugin-card' ).on( 'click', '.update-now', function( e ) {
 			e.preventDefault();
 			var $button = $( e.target );
+
+			// Do nothing while updating and when the button is disabled.
+			if ( $button.hasClass( 'updating-message' ) || $button.hasClass( 'button-disabled' ) ) {
+				return;
+			}
 
 			if ( wp.updates.shouldRequestFilesystemCredentials && ! wp.updates.updateLock ) {
 				wp.updates.requestFilesystemCredentials( e );
@@ -474,24 +539,27 @@ window.wp = window.wp || {};
 			wp.updates.updatePlugin( $button.data( 'plugin' ), $button.data( 'slug' ) );
 		} );
 
-		//
 		$( '#plugin_update_from_iframe' ).on( 'click' , function( e ) {
-			var target,	data;
+			var target, job;
 
 			target = window.parent == window ? null : window.parent,
 			$.support.postMessage = !! window.postMessage;
 
-			if ( $.support.postMessage === false || target === null )
+			if ( $.support.postMessage === false || target === null || window.parent.location.pathname.indexOf( 'update-core.php' ) !== -1 )
 				return;
 
 			e.preventDefault();
 
-			data = {
-				'action' : 'updatePlugin',
-				'slug'	 : $(this).data('slug')
+			job = {
+				action: 'updatePlugin',
+				type: 'update-plugin',
+				data: {
+					plugin: $( this ).data( 'plugin' ),
+					slug: $( this ).data( 'slug' )
+				}
 			};
 
-			target.postMessage( JSON.stringify( data ), window.location.origin );
+			target.postMessage( JSON.stringify( job ), window.location.origin );
 		});
 
 	} );
@@ -518,30 +586,14 @@ window.wp = window.wp || {};
 				break;
 			case 'updatePlugin' :
 				tb_remove();
-				if ( 'plugins' === pagenow || 'plugins-network' === pagenow ) {
-					// Return the user to the input box of the plugin's table row after closing the modal.
-					$( '#' + message.slug ).find( '.check-column input' ).focus();
-					// trigger the update
-					$( '.plugin-update-tr[data-slug="' + message.slug + '"]' ).find( '.update-link' ).trigger( 'click' );
-				} else if ( 'plugin-install' === pagenow ) {
-					$( '.plugin-card-' + message.slug ).find( 'h4 a' ).focus();
-					$( '.plugin-card-' + message.slug ).find( '[data-slug="' + message.slug + '"]' ).trigger( 'click' );
-				}
+
+				wp.updates.updateQueue.push( message );
+				wp.updates.queueChecker();
 				break;
 		}
 
-
-
 	} );
 
-	/*
-	 * If an update is on-going and a user attempts to leave the page,
-	 * open an "Are you sure?" alert.
-	 */
-	$( window ).on( 'beforeunload', function() {
-		if ( wp.updates.updateLock ) {
-			return wp.updates.l10n.beforeunload;
-		}
-	});
+	$( window ).on( 'beforeunload', wp.updates.beforeunload );
 
 })( jQuery, window.wp, window.pagenow, window.ajaxurl );

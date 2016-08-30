@@ -22,6 +22,7 @@
 				 */
 				do_action( 'twentyfifteen_credits' );
 			?>
+			<?php echo "<div>" . getenv("Environment") . "</div>" ?>
 			<a href="<?php echo esc_url( __( 'https://wordpress.org/', 'twentyfifteen' ) ); ?>"><?php printf( __( 'Proudly powered by %s', 'twentyfifteen' ), 'WordPress' ); ?></a>
 		</div><!-- .site-info -->
 	</footer><!-- .site-footer -->
